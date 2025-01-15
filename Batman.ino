@@ -1,43 +1,43 @@
 // Client Code
 #include "BLEDevice.h"
-#include <HardwareSerial.h>
-#include "RoboClaw.h"
+#include <HardwareSerial.h>  //support Roboclaw interface
+#include "RoboClaw.h"        //  Use roboclaw commands
 
-static BLEUUID    serviceUUID("ebdddb72-32f6-495f-aaf1-358ddba09f46");
+static BLEUUID    serviceUUID("ebdddb72-32f6-495f-aaf1-358ddba09f46");  //establish service "univeral unique identifier"
 static BLEUUID    controlCharUUID("ebdddb73-32f6-495f-aaf1-358ddba09f46");
 
-static boolean doConnect = false;
+static boolean doConnect = false; // static means it doesn't change memory location?
 static boolean connected = false;
 static boolean doScan = false;
 static BLERemoteCharacteristic* pControlChar;
 static BLERemoteCharacteristic* pStopChar;
 static BLEAdvertisedDevice* myDevice;
 
-HardwareSerial serial(0);	
+HardwareSerial serial(0);	  //HardwareSerial is a data class?  serial is an instantiation of the hardware  class. 
 RoboClaw roboclaw(&serial,10000);
 
-#define address 0x80
+#define address 0x80  //0x means hex follows  80 is the default address of Roboclaw in hex
 
-static void controlCallback(
+static void controlCallback(                           //
   BLERemoteCharacteristic* pBLERemoteCharacteristic,
   uint8_t* pData,
   size_t length,
   bool isNotify) {
     if(length != 8) return;
-    char command[length];
+    char command[length];   //create 8 element char array named command used to parse the incoming message
     for(int i = 0; i < length; i++){
       command[i] = pData[i];
     }
     // Serial.println(command_str.length());
-    String command_str(command);
+    String command_str(command);  //String is a class; command_str is an instantiation.  command is the char array we are passing in
     // Serial.println(command);
-    int forward = command_str.substring(0,4).toInt();
+    int forward = command_str.substring(0,4).toInt();  //.toInt is a function that exists within String class.
     int right = command_str.substring(4,8).toInt();
 
-    int left_wheel = forward + right;
+    int left_wheel = forward + right;  // -128  to +128
     int right_wheel = forward - right;
 
-    int left_wheel_cmd = left_wheel/2 + 64;
+    int left_wheel_cmd = left_wheel/2 + 64;   //roboclaw uses and unsigned 7 bit int for control; 0-63 is reverse; 65-127 forward; 64 is stop
     int right_wheel_cmd = right_wheel/2 + 64;
 
     left_wheel_cmd = constrain(left_wheel_cmd, 0, 127);
@@ -128,7 +128,7 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks {
 
 void setup() {
   Serial.begin(9600);
-  serial.begin(38400, SERIAL_8N1, -1, -1);
+  serial.begin(38400, SERIAL_8N1, -1, -1);  //small s because this is an instance of the class hardwareserial
   Serial.println("Starting Arduino BLE Client application...");
   BLEDevice::init("");
 
