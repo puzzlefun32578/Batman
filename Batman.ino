@@ -22,8 +22,8 @@ static BLEAdvertisedDevice* myDevice;
 HardwareSerial serial(0);	  //HardwareSerial is a data class?  serial is an instantiation of the hardware  class. 
 RoboClaw roboclaw(&serial, 10000);
 
-float current_turn_rate = 0; 
-float current_drift_error = 0;  //heading is always in radians and relative to the last requested orientation
+float desired_heading = 0;
+float current_heading = 0;  //heading is always in radians and relative to the last requested orientation
 float scale_factor = 50;
 int time_of_last_correction = 0;
 float turn_correction = 0;
@@ -207,11 +207,11 @@ void loop() {
     current_heading = current_heading + g.gyro.z/frequency + turn_bias;   //integrate the z axis gyro to estimate current heading relative to desired heading
     delay(10);     
   }
-  int16_t Lcurrent,Rcurrent
+  int16_t Lcurrent,Rcurrent;
   roboclaw.ReadCurrents(address, Lcurrent, Rcurrent);
 
-  Serial.print(" current_drift_error is ");
-  Serial.print(current_drift_error);
+  Serial.print(" current_heading is ");
+  Serial.print(current_heading);
   Serial.println(" rad");
   Serial.println("");
   Serial.print("motor currents L/R are ");
