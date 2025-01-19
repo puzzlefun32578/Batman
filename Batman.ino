@@ -1,11 +1,11 @@
 // This is the code for the original Bat Caddy cart (Batman), and incorporates the GY 521 IMU on the MPU 6050 board
 
 #include "BLEDevice.h"
-#include <HardwareSerial.h>  //support Roboclaw interface
-#include "RoboClaw.h"        //  Use roboclaw commands
+#include <HardwareSerial.h>  //support Roboclaw interface#include "RoboClaw.h"        //  Use roboclaw commands
 #include <Adafruit_MPU6050.h>  //support IMU
 #include <Adafruit_Sensor.h>//support IMU
 #include <Wire.h>             //support IMU
+#include <RoboClaw.h>
 
 Adafruit_MPU6050 mpu;
 
@@ -20,14 +20,14 @@ static BLERemoteCharacteristic* pStopChar;
 static BLEAdvertisedDevice* myDevice;
 
 HardwareSerial serial(0);	  //HardwareSerial is a data class?  serial is an instantiation of the hardware  class. 
-RoboClaw roboclaw(&serial,10000);
+RoboClaw roboclaw(&serial, 10000);
 
 float current_turn_rate = 0; 
-float current_heading_error = 0;  //heading is always in radians and relative to the last requested orientation
+float current_drift_error = 0;  //heading is always in radians and relative to the last requested orientation
 float scale_factor = 50;
 int time_of_last_correction = 0;
 float turn_correction = 0;
-float turn_bias = .02;   //when the cart is not moving it reads a turn rate of +.02 rads/sec. I will substract this from the measurement before using to adjust cart
+float turn_bias = .00018;   //this value does the best job of not accumulating heading error while static
 int previous_forward = 0;
 
 #define address 0x80  //0x means hex follows  80 is the default address of Roboclaw in hex
@@ -53,29 +53,34 @@ static void controlCallback(                           //
     //Serial.print("right command from Robin is ");
     //Serial.println(right);
 
-    if (abs(right)<5) {    //try to stop turning if there is no turn command given
-        right = 0;         //very small turn values are interpreted as a joystick bias and eliminated
-        turn_correction = current_heading_error * scale_factor;     //scale factor will be determined empirically; I think it will be negative so cart goes left if it is currently turning right
-      }
-      else { current_heading_error = 0;}    //rezero the heading error bucket if I am steering the cart
-    //}  
+    if (abs(right)<5) {  right = 0; }  //very small turn values are interpreted as a joystick bias and eliminated
+    
+    desired_heading = desired_heading + right/56;      //right is now the requested heading change in degrees so divide by 56 to put in radians
+    turn_correction = (current_heading - desired_heading) * scale_factor;     //scale factor was determined empirically   
+     
+    if (forward < 5) {           // if the cart isn't moving, then rezero the headings 
+      desired_heading = 0;
+      current_heading = 0;
+    }  
+    
     forward = constrain(forward, previous_forward - 5, previous_forward + 5);  // this should make stopping a little smoother.
-    previous_forward = forward;
-    int left_wheel = forward + right - (int)turn_correction;  // -128  to +128
-    int right_wheel = forward - right + (int)turn_correction;
+    previous_forward = forward; //save the current forward command to use as a reference to limit the change in 'forward' in the next cycle
+    // if(forward = 0) { engage brakes}
+    int left_wheel =  forward - (int)turn_correction;  // -128  to +128
+    int right_wheel = forward + (int)turn_correction;
 
-    int left_wheel_cmd = left_wheel/2 + 64;   //roboclaw uses and unsigned 7 bit int for control; 0-63 is reverse; 65-127 forward; 64 is stop
+    int left_wheel_cmd = left_wheel/2 + 64;   //roboclaw uses an unsigned 7 bit int for control; 0-63 is reverse; 65-127 forward; 64 is stop
     int right_wheel_cmd = right_wheel/2 + 64;
 
-    left_wheel_cmd = constrain(left_wheel_cmd, 0, 125);     //ensure the motor commands do not go out of range
+    left_wheel_cmd  = constrain( left_wheel_cmd, 0, 125);     //ensure the motor commands do not go out of range
     right_wheel_cmd = constrain(right_wheel_cmd, 0, 125);
 
+    roboclaw.ForwardBackwardM1(address, left_wheel_cmd);  //send the motor commands to the motor controller (Roboclaw)
+    roboclaw.ForwardBackwardM2(address,right_wheel_cmd);
+    
     Serial.print(left_wheel_cmd);
     Serial.print(", ");
     Serial.println(right_wheel_cmd);
-
-    roboclaw.ForwardBackwardM1(address,left_wheel_cmd);
-    roboclaw.ForwardBackwardM2(address,right_wheel_cmd);
 }
 
 class MyClientCallback : public BLEClientCallbacks {
@@ -185,18 +190,34 @@ void setup() {
 
 // This is the Arduino main loop function.
 void loop() {
+  /*
+  this is the design philosophy for how Batman(the cart) will handle steering of the cart.  
+  The operator will press the remote control joystick left/right to change the desired heading relative to the current heading.
+  Batman code will store the desired heading in radians relative to the cart position and seek to make the cart heading equal to the desired heading.
+  The initial cart heading will be set to zero radians.  
+  Only when in cruise control mode, the cart will also record any uncommanded directional drift and seek to maintain straight line travel if no turn command is in force.
+  The goal orientation will be desired_heading (in radians, relative to a starting orientation set to zero)
+  The difference between the current heading (calculated from turn inputs and drift) will be stored as heading_error.
+  */
 
   int frequency = 100;
   for(int i = 0; i <frequency; i++){
     sensors_event_t a, g, temp;
     mpu.getEvent(&a, &g, &temp);
-    current_heading_error = current_heading_error + g.gyro.z/frequency + .00018;   //integrate the z axis gyro to estimate current heading relative to desired heading
+    current_heading = current_heading + g.gyro.z/frequency + turn_bias;   //integrate the z axis gyro to estimate current heading relative to desired heading
     delay(10);     
   }
-  
-    Serial.print(" current_heading_error is ");
-    Serial.print(current_heading_error);
-    Serial.println(" rad");
+  int16_t Lcurrent,Rcurrent
+  roboclaw.ReadCurrents(address, Lcurrent, Rcurrent);
+
+  Serial.print(" current_drift_error is ");
+  Serial.print(current_drift_error);
+  Serial.println(" rad");
+  Serial.println("");
+  Serial.print("motor currents L/R are ");
+  Serial.print(Lcurrent);
+  Serial.print("   ");
+  Serial.println(Rcurrent);
 
   if (doConnect == true) {
     if (connectToServer()) {
