@@ -27,7 +27,7 @@ float current_heading = 0;  //heading is always in radians and relative to the l
 float scale_factor = 50;
 int time_of_last_correction = 0;
 float turn_correction = 0;
-float turn_bias = .00018;   //this value does the best job of not accumulating heading error while static
+float turn_bias = .018;   //this value does the best job of not accumulating heading error while static (rads/sec)
 int previous_forward = 0;
 
 #define address 0x80  //0x means hex follows  80 is the default address of Roboclaw in hex
@@ -193,25 +193,30 @@ void loop() {
   /*
   this is the design philosophy for how Batman(the cart) will handle steering of the cart.  
   The operator will press the remote control joystick left/right to change the desired heading relative to the current heading.
-  Batman code will store the desired heading in radians relative to the cart position and seek to make the cart heading equal to the desired heading.
+  Batman code will store the desired heading in desired_heading (in radians) relative to the cart position and seek to make the cart heading equal to the desired heading.
   The initial cart heading will be set to zero radians.  
-  Only when in cruise control mode, the cart will also record any uncommanded directional drift and seek to maintain straight line travel if no turn command is in force.
+  The cart will also detect any uncommanded directional drift and seek to maintain straight line travel if no turn command is in force.
   The goal orientation will be desired_heading (in radians, relative to a starting orientation set to zero)
-  The difference between the current heading (calculated from turn inputs and drift) will be stored as heading_error.
   */
 
-  int frequency = 100;
-  for(int i = 0; i <frequency; i++){
+  int loop_delay_time = 10;   //msec
+  float readings_per_sec = 1000/loop_delay_time;
+  int num_of_readings = 100;
+  for(int i = 0; i <num_of_readings; i++){
     sensors_event_t a, g, temp;
     mpu.getEvent(&a, &g, &temp);
-    current_heading = current_heading + g.gyro.z/frequency + turn_bias;   //integrate the z axis gyro to estimate current heading relative to desired heading
-    delay(10);     
+    current_heading = current_heading + (g.gyro.z + turn_bias)/readings_per_sec ;   //integrate the z axis gyro to estimate current heading relative to desired heading
+    delay(loop_delay_time);     
   }
   int16_t Lcurrent,Rcurrent;
   roboclaw.ReadCurrents(address, Lcurrent, Rcurrent);
 
   Serial.print(" current_heading is ");
   Serial.print(current_heading);
+  Serial.println(" rad");
+  Serial.println("");
+  Serial.print(" desired_heading is ");
+  Serial.print(desired_heading);
   Serial.println(" rad");
   Serial.println("");
   Serial.print("motor currents L/R are ");
