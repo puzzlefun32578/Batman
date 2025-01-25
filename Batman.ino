@@ -24,13 +24,28 @@ RoboClaw roboclaw(&serial, 10000);
 
 float desired_heading = 0;
 float current_heading = 0;  //heading is always in radians and relative to the last requested orientation
-float scale_factor = 50;
-int time_of_last_correction = 0;
+float heading_error = 0;
 float turn_correction = 0;
 float turn_bias = .018;   //this value does the best job of not accumulating heading error while static (rads/sec)
+float previous_heading_error = 0;
+float error_sum = 0;
+float error_delta = 0;
+float turn_command_in_radians = 0;
+
+float Kp = 20;   //These are the tuning constants for PID control of the heading error
+float Ki = 2;
+float Kd = -2;
+
 int previous_forward = 0;
+int last_left_wheel = 0;
+int last_right_wheel = 0;
+int speed_change_limit = 10;
+int stop_command_time = 0;
+int time_of_last_correction = 0;
 
 #define address 0x80  //0x means hex follows  80 is the default address of Roboclaw in hex
+
+/* this function is executed each time that Batman receives a Bluetooth message from Robin, which occurs at approx 10Hz. */
 
 static void controlCallback(                           //
   BLERemoteCharacteristic* pBLERemoteCharacteristic,
@@ -47,27 +62,42 @@ static void controlCallback(                           //
     // Serial.println(command);
     int forward = command_str.substring(0,4).toInt();  //.toInt is a function that exists within String class.
     int right = command_str.substring(4,8).toInt();
-
-    //Serial.print("forward command from Robin is ");
-    //Serial.println(forward);
-    //Serial.print("right command from Robin is ");
-    //Serial.println(right);
-
-    if (abs(right)<5) {  right = 0; }  //very small turn values are interpreted as a joystick bias and eliminated
     
-    desired_heading = desired_heading + right/56;      //right is now the requested heading change in degrees so divide by 56 to put in radians
-    turn_correction = (current_heading - desired_heading) * scale_factor;     //scale factor was determined empirically   
+    /* 
+    The integer 'right' passed from Robin to Batman is intended to be a command to adjust the orientation the cart will seek (desired_heading).
+    the joystick that generates the input in Robin code is read by a 12 bit ADC and subsequently converted to 8 bit, so +/- 128 full scale.  The robin code further
+    divides that number by 25 to generate a full scale of 0-5.  This integer is treated as a heading change each time it is passed to Batman.
+    Since data is passed to Batman at 10 Hz, one full second of full displacement of the joystick should result in approx 5x10=50 degrees of
+    heading change.    
+    */
+    
+    turn_command_in_radians = right/56.0;  //convert the turn command from degrees to radians (approx). right turn is positive; neg = left
+    
+    desired_heading = desired_heading + turn_command_in_radians;      //update desired heading; positive desired heading is clockwise from current
+    heading_error = desired_heading - current_heading;      // define the heading error as difference between current heading and desired heading
+    error_delta = previous_heading_error - heading_error;
+    error_sum = error_sum + heading_error;
+    turn_correction = (Kp * heading_error) + (Ki * error_sum) + (Kd * error_delta);     //scale factor was determined empirically; turn correction is neg if turning clkwise  
+    previous_heading_error = heading_error;             //save the heading error to calculate the change in next loop
+
+   /* This block is meant to make the cart stop trying to turn if the cart has not received any commands from the operator for a while*/
+
+    if (forward < 3 && right == 0 )
+      {                                                  // if the cart is stopped
+        if (stop_command_time == 0) { stop_command_time = millis();}                    // start timer if the cart has stopped
+        if (millis() - stop_command_time > 3000)       // if no motion is commanded for 3 secs, zero out turns
+          {                                 
+            turn_correction   = 0;
+            stop_command_time = 0;           //    
+            error_sum = 0;                   // reset the integral in the PID control of heading correction
+          }
+      }
      
-    if (forward < 5) {           // if the cart isn't moving, then rezero the headings 
-      desired_heading = 0;
-      current_heading = 0;
-    }  
-    
-    forward = constrain(forward, previous_forward - 5, previous_forward + 5);  // this should make stopping a little smoother.
-    previous_forward = forward; //save the current forward command to use as a reference to limit the change in 'forward' in the next cycle
-    // if(forward = 0) { engage brakes}
-    int left_wheel =  forward - (int)turn_correction;  // -128  to +128
+    int left_wheel =  forward - (int)turn_correction;  // -128  to +128;  correction is neg for clkwise turn, so 
     int right_wheel = forward + (int)turn_correction;
+
+    left_wheel =  constrain(left_wheel, last_left_wheel - speed_change_limit, last_left_wheel + speed_change_limit);  // -128  to +128;  correction is neg for clkwise turn, so 
+    right_wheel = constrain(right_wheel, last_right_wheel - speed_change_limit, last_right_wheel + speed_change_limit);
 
     int left_wheel_cmd = left_wheel/2 + 64;   //roboclaw uses an unsigned 7 bit int for control; 0-63 is reverse; 65-127 forward; 64 is stop
     int right_wheel_cmd = right_wheel/2 + 64;
@@ -78,6 +108,9 @@ static void controlCallback(                           //
     roboclaw.ForwardBackwardM1(address, left_wheel_cmd);  //send the motor commands to the motor controller (Roboclaw)
     roboclaw.ForwardBackwardM2(address,right_wheel_cmd);
     
+    last_left_wheel = left_wheel;      // remember last values to limit the change next time
+    last_right_wheel =  right_wheel;
+
     Serial.print(left_wheel_cmd);
     Serial.print(", ");
     Serial.println(right_wheel_cmd);
@@ -165,15 +198,13 @@ void setup() {
 
   Serial.println("BLE initialized. Starting scan");
 
-  //while (!Serial)                   I dont think I need these 2 lines.  delete these is code works
-    //delay(10); // will pause Zero, Leonardo, etc until serial console opens
-
-    if (!mpu.begin()) {         //  initialize the IMU board
+  if (!mpu.begin())      //  initialize the IMU board
+  {         
     Serial.println("Failed to find MPU6050 chip");
     while (1) {
       delay(10);
       }
-    }
+  }
    
   // Retrieve a Scanner and set the callback we want to use to be informed when we
   // have detected a new device.  Specify that we want active scanning and start the
@@ -199,16 +230,18 @@ void loop() {
   The goal orientation will be desired_heading (in radians, relative to a starting orientation set to zero)
   */
 
-  int loop_delay_time = 10;   //msec
+  int loop_delay_time = 10;   //sample interval of the gyro
   float readings_per_sec = 1000/loop_delay_time;
-  int num_of_readings = 100;
-  for(int i = 0; i <num_of_readings; i++){
-    sensors_event_t a, g, temp;
+  int num_of_readings = 200;
+  sensors_event_t a, g, temp;
+
+  for(int i = 0; i < num_of_readings; i++)
+  {
     mpu.getEvent(&a, &g, &temp);
     current_heading = current_heading + (g.gyro.z + turn_bias)/readings_per_sec ;   //integrate the z axis gyro to estimate current heading relative to desired heading
     delay(loop_delay_time);     
   }
-  int16_t Lcurrent,Rcurrent;
+  int16_t Lcurrent, Rcurrent;
   roboclaw.ReadCurrents(address, Lcurrent, Rcurrent);
 
   Serial.print(" current_heading is ");
