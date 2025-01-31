@@ -1,5 +1,11 @@
-/*  This is the code for the original Bat Caddy cart (Batman) .  This program will run on an XIAO ESP32-S3 board using an Xtensa microprocessor. 
- the golf cart also has a GY 521 IMU on the MPU 6050 board.  z axis gyro data is read from the GY521 to measure the orientation of the cart.
+/*  This is the code for the used Bat Caddy X3R motorized push golf cart I purchased from Ken Adams in fall 2024.  
+I named the cart 'Batman' in honor of the company name. The remote control built to operate Batman is named 'Robin'.
+This program is named 'Batman' since it runs on the Batman cart.
+This program will run on an XIAO ESP32-S3 board using an Xtensa microprocessor. 
+The golf Batman (the cart) also has a GY-521 3-axis (accel and gyro) IMU mounted on an Adafruit MPU6050 board. 
+Z axis gyro data is read from the GY-521 to measure the orientation of the cart.
+The data passed from Robin to Batman via Bluetooth consists of 2 integers passed in an asci string.  One integer represents forward speed, and
+the other represents a requested change in the direction the cart is moving.
 */
 
 #include "BLEDevice.h"
@@ -8,22 +14,21 @@
 #include <Adafruit_Sensor.h>//support IMU
 #include <Wire.h>             //support IMU
 #include <RoboClaw.h>         // library for the Roboclaw motor controller.  The Roboclaw motor controller is designed to drive 2 motors 
-                              //  with 15 amps continuos each.
+                              //  with 15 amps continuous each.
 
 Adafruit_MPU6050 mpu;
 
+HardwareSerial serial(0);	  // Roboclaw setup
+RoboClaw roboclaw(&serial, 10000);
+
 static BLEUUID    serviceUUID("ebdddb72-32f6-495f-aaf1-358ddba09f46");  //establish service "univeral unique identifier"
 static BLEUUID    controlCharUUID("ebdddb73-32f6-495f-aaf1-358ddba09f46");
-
 static boolean doConnect = false; // static means it doesn't change memory location?
 static boolean connected = false;
 static boolean doScan = false;
 static BLERemoteCharacteristic* pControlChar;
 static BLERemoteCharacteristic* pStopChar;
 static BLEAdvertisedDevice* myDevice;
-
-HardwareSerial serial(0);	  // Roboclaw setup
-RoboClaw roboclaw(&serial, 10000);
 
 float desired_heading = 0;   // this is the goal heading of the cart relative to initial cart orientation
 float current_heading = 0;  //heading is always in radians and relative to the last requested orientation
@@ -37,13 +42,13 @@ float turn_command_in_radians = 0;
 
 //  These are the tuning constants for PID control of the heading error
 float Kp = 100;   // proportional gain
-float Ki = 4;     // integral gain
+float Ki = 2;     // integral gain
 float Kd = 0;     // derivative gain
 
 int previous_forward = 0;  //the most recent past forward speed command from Robin
 int previous_left_wheel = 0;
 int previous_right_wheel = 0;
-int speed_change_limit = 15;
+int speed_change_limit = 20;
 int stop_command_timer = 0;
 int time_of_last_correction = 0;
 
@@ -62,18 +67,12 @@ static void controlCallback(                           //
     char command[length];   //create 8 element char array named command used to parse the incoming message
     for(int i = 0; i < length; i++){
       command[i] = pData[i];
-    }
+/    }
     // Serial.println(command_str.length());
     String command_str(command);  //String is a class; command_str is an instantiation.  command is the char array we are passing in
-    // Serial.println(command);
+    
     int forward = command_str.substring(0,4).toInt();  //.toInt is a function that exists within String class.
     int right = command_str.substring(4,8).toInt();
-    
-    /* This block is meant to make the cart stop trying to turn if the cart has not received any commands from the operator for a while*/
-
-    
-
-    
     
     /* 
     The integer 'right' passed from Robin to Batman is intended to be a command to adjust the orientation the cart will seek (desired_heading).
@@ -92,10 +91,11 @@ static void controlCallback(                           //
     turn_correction = (Kp * heading_error) + (Ki * error_sum) + (Kd * error_delta);     //scale factor was determined empirically; turn correction is neg if turning clkwise  
     previous_heading_error = heading_error;             //save the heading error to calculate the change in next loop
 
-   if (abs(forward) < 3 && right == 0 )
+  /* This block is meant to make the cart stop trying to turn if the cart has not received any commands from the operator for a while*/ 
+    if (abs(forward) < 3 && right == 0 )
       {                                                  // if the cart is stopped
-        if (stop_command_time == 0) { stop_command_timer = millis();}                    // start timer if the cart has stopped
-        if (millis() - stop_command_timer > 4000)       // if no motion is commanded for 3 secs, zero out turns
+        if (stop_command_timer == 0) { stop_command_timer = millis();}                    // start timer if the cart has stopped
+        if (millis() - stop_command_timer > 4000)       // if no motion is commanded for 4 secs, zero out turns
           {                                 
             desired_heading = 0;     // zero out everything if Robin hasn't requested motion for 4 seconds
             current_heading = 0;
@@ -107,14 +107,14 @@ static void controlCallback(                           //
             stop = true;      // this is an important feature. 'stop' prevents the cart from moving until Robin requests motion          
           }
       }
-     else {stop = false;}      // make sure that motor commands can be issued if the joystick is used
+    else {stop = false;}      // make sure that motor commands can be issued if the joystick is used
 
     int left_wheel =  forward + (int)turn_correction;  // this is where the requests from Robin for forward motion and turning are translated 
     int right_wheel = forward - (int)turn_correction;  // into commands for the wheels
 
    /*  These 2 lines serve 2 functions: 1) prevent any motion if 'stop' is true; 2) limit how much motor speed can change per time step   */
 
-    left_wheel =  !stop*constrain(left_wheel, previous_left_wheel - speed_change_limit, previouslast_left_wheel + speed_change_limit);  // -128  to +128;  correction is neg for clkwise turn, so 
+    left_wheel =  !stop*constrain(left_wheel, previous_left_wheel - speed_change_limit, previous_left_wheel + speed_change_limit);  // -128  to +128;  correction is neg for clkwise turn, so 
     right_wheel = !stop*constrain(right_wheel, previous_right_wheel - speed_change_limit, previous_right_wheel + speed_change_limit);
 
     /*  Roboclaw uses an unsigned 7 bit int for control; 0-63 is reverse; 65-127 forward; 64 is stop  */
@@ -125,6 +125,9 @@ static void controlCallback(                           //
     left_wheel_cmd  = constrain( left_wheel_cmd, 0, 125);     //ensure the motor commands do not go out of range
     right_wheel_cmd = constrain(right_wheel_cmd, 0, 125);
 
+    //uint32_t max = 2000;  //max current sent to motors in units of 10milliAmps
+    //roboclaw.SetM1MaxCurrent(address, max);
+    //roboclaw.SetM2MaxCurrent(address, max);
     roboclaw.ForwardBackwardM1(address, left_wheel_cmd);  //send the motor commands to the motor controller (Roboclaw)
     roboclaw.ForwardBackwardM2(address, right_wheel_cmd);
     
@@ -244,16 +247,15 @@ void loop() {
   /*
   this is the design philosophy for how Batman(the cart) will handle steering of the cart.  
   The operator will press the remote control joystick left/right to change the desired heading relative to the current heading.
-  Batman code will store the desired heading (in radians) relative to the cart orientation and seek to make the cart heading equal to the desired heading.
+  Batman will store the desired heading (in radians) relative to the cart orientation and seek to make the cart heading equal to the desired heading.
   The initial cart heading will be set to zero radians.  
   The cart will also detect any uncommanded drift and seek to maintain straight line travel if no turn command is in force.
-  The goal orientation will be desired_heading (in radians, relative to a starting orientation set to zero)
   */
 
   int loop_delay_time = 10;   //sample the gyro at 100 Hz
-  float readings_per_sec = 1000/loop_delay_time;
-  int num_of_readings = 200;
-  sensors_event_t a, g, temp;
+  float readings_per_sec = 1000/loop_delay_time;  // need this value to convert turn_rate as reported by the gyro into an angle 
+  int num_of_readings = 200;   //this value is not critical; it does set how long it takes to run one iteration through function loop
+  sensors_event_t a, g, temp;   //data type used by the gyro board
 
   for(int i = 0; i < num_of_readings; i++)
   {
@@ -261,7 +263,7 @@ void loop() {
     current_heading = current_heading + !stop*(g.gyro.z + turn_bias)/readings_per_sec ;   //integrate the z axis gyro to estimate current heading relative to desired heading
     delay(loop_delay_time);                                                  // '!stop' prevents any drift from being accumulated while cart is stopped    
   }
-  int16_t Lcurrent, Rcurrent;
+  int16_t Lcurrent = 0, Rcurrent = 0;
   roboclaw.ReadCurrents(address, Lcurrent, Rcurrent);
 
   Serial.print(" current_heading is ");
@@ -289,6 +291,4 @@ void loop() {
   if (!connected) {
     BLEDevice::getScan()->start(0);
   }
-  
-  //delay(1000); // Delay a second between loops.     I don't need a delay here now since I am taking a second to read turnrate from MPU6050
-} // End of loop
+  // End of loop
