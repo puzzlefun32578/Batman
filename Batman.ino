@@ -48,7 +48,7 @@ float Kd = 0;     // derivative gain
 int previous_forward = 0;  //the most recent past forward speed command from Robin
 int previous_left_wheel = 0;
 int previous_right_wheel = 0;
-int speed_change_limit = 20;
+int speed_change_limit = 100;
 int stop_command_timer = 0;
 int time_of_last_correction = 0;
 
@@ -67,7 +67,7 @@ static void controlCallback(                           //
     char command[length];   //create 8 element char array named command used to parse the incoming message
     for(int i = 0; i < length; i++){
       command[i] = pData[i];
-/    }
+    }
     // Serial.println(command_str.length());
     String command_str(command);  //String is a class; command_str is an instantiation.  command is the char array we are passing in
     
@@ -75,14 +75,14 @@ static void controlCallback(                           //
     int right = command_str.substring(4,8).toInt();
     
     /* 
-    The integer 'right' passed from Robin to Batman is intended to be a command to adjust the orientation the cart will seek (desired_heading).
-    the joystick that generates the input in Robin code is read by a 12 bit ADC and subsequently converted to 8 bit, so +/- 128 full scale.  The robin code further
+    The integer 'right' passed from Robin to Batman is interpreted as a command to adjust the orientation the cart (desired_heading).
+    the joystick that generates the input in Robin is read by a 12-bit ADC and subsequently converted to 8 bit, so +/- 128 full scale.  The robin code further
     divides that number by 25 to generate a full scale of 0-5.  This integer is treated as a heading change each time it is passed to Batman.
     Since data is passed to Batman at 10 Hz, one full second of full displacement of the joystick should result in approx 5x10=50 degrees of
     heading change.    
     */
     
-    turn_command_in_radians = right/56.0;  //convert the turn command from degrees to radians (approx). right turn is positive; neg = left
+    turn_command_in_radians = right/56.0;  //convert the turn command from degrees to radians (approx). right turn is positive; left is negative
     
     desired_heading = desired_heading + turn_command_in_radians;      //update desired heading; positive desired heading is clockwise from current
     heading_error = desired_heading - current_heading;      // define the heading error as difference between current heading and desired heading
@@ -109,8 +109,8 @@ static void controlCallback(                           //
       }
     else {stop = false;}      // make sure that motor commands can be issued if the joystick is used
 
-    int left_wheel =  forward + (int)turn_correction;  // this is where the requests from Robin for forward motion and turning are translated 
-    int right_wheel = forward - (int)turn_correction;  // into commands for the wheels
+    int left_wheel =  max(forward, forward + (int)turn_correction);  // this is where the requests from Robin for forward motion and turning are translated 
+    int right_wheel = max(forward, forward - (int)turn_correction);  // into commands for the wheels
 
    /*  These 2 lines serve 2 functions: 1) prevent any motion if 'stop' is true; 2) limit how much motor speed can change per time step   */
 
@@ -291,4 +291,5 @@ void loop() {
   if (!connected) {
     BLEDevice::getScan()->start(0);
   }
+}
   // End of loop
