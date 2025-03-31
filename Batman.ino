@@ -41,8 +41,8 @@ float error_delta = 0;      // This represents the rate of change in heading err
 float turn_command_in_radians = 0;
 
 //  These are the tuning constants for PID control of the heading error
-float Kp = 100;   // proportional gain
-float Ki = 2;     // integral gain
+float Kp = 30;   // proportional gain
+float Ki = 0;     // integral gain
 float Kd = 0;     // derivative gain
 
 int previous_forward = 0;  //the most recent past forward speed command from Robin
@@ -51,6 +51,8 @@ int previous_right_wheel = 0;
 int speed_change_limit = 100;
 int stop_command_timer = 0;
 int time_of_last_correction = 0;
+int left_wheel = 0;
+int right_wheel = 0;
 
 bool stop = false;
 
@@ -85,7 +87,7 @@ static void controlCallback(                           //
     turn_command_in_radians = right/56.0;  //convert the turn command from degrees to radians (approx). right turn is positive; left is negative
     
     desired_heading = desired_heading + turn_command_in_radians;      //update desired heading; positive desired heading is clockwise from current
-    heading_error = desired_heading - current_heading;      // define the heading error as difference between current heading and desired heading
+    heading_error = constrain(desired_heading - current_heading, -3, 3);      // define the heading error as difference between current heading and desired heading
     error_delta = previous_heading_error - heading_error;
     error_sum = error_sum + heading_error;
     turn_correction = (Kp * heading_error) + (Ki * error_sum) + (Kd * error_delta);     //scale factor was determined empirically; turn correction is neg if turning clkwise  
@@ -107,10 +109,23 @@ static void controlCallback(                           //
             stop = true;      // this is an important feature. 'stop' prevents the cart from moving until Robin requests motion          
           }
       }
-    else {stop = false;}      // make sure that motor commands can be issued if the joystick is used
-
-    int left_wheel =  max(forward, forward + (int)turn_correction);  // this is where the requests from Robin for forward motion and turning are translated 
-    int right_wheel = max(forward, forward - (int)turn_correction);  // into commands for the wheels
+    else {stop = false;}  
+    
+        // make sure that motor commands can be issued if the joystick is used
+    
+    //if (abs(turn_correction) > allowed_error)
+    //  { 
+       if (forward > 90)
+       {
+          left_wheel =  min(forward,forward + (int)turn_correction);  // this is where the requests from Robin for forward motion and turning are translated 
+          right_wheel = min(forward,forward - (int)turn_correction);  // into commands for the wheels
+       }
+       else
+       {
+          left_wheel =  max(forward,forward + (int)turn_correction);  // this is where the requests from Robin for forward motion and turning are translated 
+          right_wheel = max(forward,forward - (int)turn_correction);  // into commands for the wheels}
+       }
+      //}
 
    /*  These 2 lines serve 2 functions: 1) prevent any motion if 'stop' is true; 2) limit how much motor speed can change per time step   */
 
